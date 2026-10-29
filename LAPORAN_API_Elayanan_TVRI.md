@@ -41,6 +41,27 @@ Login **tidak** mengirim `device_id`/fingerprint. Yang dikirim:
 - `getFingerprint()`/`getUniqueId()`/`getDeviceId()` **tidak dipakai** di login.
 - **Device binding** dikunci ke **FCM `token`** (satu-satunya nilai unik per-instalasi).
 
+### 2.1 Di mana FCM token disimpan?
+
+FCM token **diterbitkan oleh server Google (FCM)**, dan Google memegang catatan **otoritatif**-nya (pemetaan `token → instance app → device`) untuk me-routing push. Di HP hanya ada **salinan cache**.
+
+```
+Server Google FCM   ← catatan OTORITATIF (untuk routing push)
+      │  (saat pertama / refresh)
+      ▼
+Firebase SDK + Google Play Services di HP  ← CACHE token
+      │
+      └─ getToken() baca dari cache ini (cepat, tanpa network)
+```
+
+| Lokasi | Token ada? | Bisa dibaca? |
+|---|---|---|
+| Server Google FCM | ✅ otoritatif | Hanya pemilik project Firebase (server key / Firebase console) |
+| Cache di HP (data privat app / Google Play Services) | ✅ salinan | Perlu **root** |
+| Saat app mengirim ke server TVRI (field `token`) | ✅ sesaat | **Intercept** traffic |
+
+Catatan: lokasi persis cache lokal bergantung versi Firebase SDK & Google Play Services (bisa di storage GMS dan/atau SharedPreferences/datastore Firebase Installations di data privat app). Intinya: **otoritatif di Google, cache di HP** — bukan nilai statik yang bisa dirakit manual.
+
 ---
 
 ## 3. AUTENTIKASI
@@ -298,5 +319,53 @@ saveData (MASUK)  /  saveDataPulang (PULANG)
 - Didekompilasi dengan `hermes-dec` → `decompiled.js` (±16 MB).
 - Field tiap endpoint dibaca dari konstruksi `FormData.append(...)` di kode (ref baris di `decompiled.js`: login 231565, saveData 331258, saveDataPulang 354635, status_wf 331614, shift 331705, get_time 331796, cek_masuk 249171, rekap 337644, getTahun 337548, getbulan 337483, presensiById 354435, ubah_password 352705, detail_pegawai 248650, notif 249006/249095, webview 330664).
 - Endpoint publik diverifikasi live (getTahun, getBulan, info, notif, rekap).
+
+## 12. Lampiran — Setup ADB via Kabel USB (Windows)
+
+Untuk inspeksi app sendiri & persiapan intercept traffic (debugging).
+
+### Langkah 1 — Unduh ADB (platform-tools)
+1. Buka `https://developer.android.com/tools/releases/platform-tools`
+2. Unduh **SDK Platform-Tools for Windows**
+3. Ekstrak ke folder, mis. `C:\platform-tools`
+
+### Langkah 2 — Aktifkan USB Debugging di HP
+1. **Setelan → Tentang Ponsel**
+2. Ketuk **Nomor bentukan (Build number)** 7× → mode pengembang aktif
+3. **Setelan → Opsi Pengembang** → aktifkan **USB Debugging**
+
+### Langkah 3 — Colok & otorisasi
+1. Colok HP ke PC via USB (kabel **data**, bukan charge-only)
+2. Mode USB di HP → **Transfer File (MTP)**
+3. Popup **"Izinkan USB debugging?"** → centang **"Selalu izinkan dari komputer ini"** → **OK**
+
+### Langkah 4 — Verifikasi
+```powershell
+cd C:\platform-tools
+.\adb devices
+```
+Hasil benar:
+```
+List of devices attached
+ABC123XYZ       device
+```
+- `unauthorized` → cek popup izin di HP
+- kosong → ganti kabel data, atau install driver USB OEM (realme/OPPO)
+
+### Langkah 5 — Perintah inspeksi berguna
+```powershell
+.\adb devices                                    # cek device
+.\adb shell                                       # shell HP
+.\adb logcat                                       # log sistem (debugging)
+.\adb shell pm list packages | findstr layanan    # cek package app
+.\adb shell dumpsys package com.layanan            # permission & komponen app
+.\adb install aplikasi.apk                          # pasang APK
+```
+
+### Catatan
+- ADB Wireless (tanpa kabel) juga tersedia di Android 10: Opsi Pengembang → Wireless debugging (perlu pairing pertama via kabel di sebagian perangkat).
+- Untuk intercept HTTPS app ini perlu bypass trust sertifikat (root atau patch APK) — lihat catatan di Bagian 10 soal proteksi.
+
+---
 
 *Dokumentasi untuk pemahaman API atas akun milik sendiri. Endpoint yang mengubah data (absensi, password) tidak dieksekusi selama pengujian.*
