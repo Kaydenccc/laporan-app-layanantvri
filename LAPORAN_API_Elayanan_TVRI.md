@@ -111,6 +111,31 @@ POST front_end/Login/auth_pegawai_app   → 500 Error
 
 ---
 
+### 3.5 Session & Identitas `pegawai_id` (Temuan)
+
+**Session (cookie):**
+- Login sukses → server mengirim `Set-Cookie: simpegTVr126=...; Max-Age=7200` (berlaku ~2 jam).
+- App (okhttp) menyimpan cookie ini dan **mengirimnya otomatis di header `Cookie`** pada setiap request berikutnya → inilah yang mengautentikasi endpoint presensi/data.
+- Field data (pegawai_id, GPS, foto) ada di **body**; session ada di **header `Cookie`** — dua tempat berbeda.
+
+**Penyimpanan data login:**
+- Response login `data` disimpan app ke AsyncStorage **`@sesi`** (`decompiled.js:231658`).
+- Semua endpoint mengambil `pegawai_id` dari `@sesi` via `getData()` (`decompiled.js:231402, 231435`) — jadi nilainya = `response.data.pegawai_id` dari login.
+
+**`pegawai_id` = NIP atau ID internal? — ⚠️ BELUM PASTI**
+- Nilai `pegawai_id` berasal dari response login, **bukan** diketik user.
+- Indikasi (bukan bukti) bahwa ini mungkin ID internal, bukan NIP: sistem memakai field `username`/`nip` DAN `pegawai_id` secara terpisah; response `detail_pegawai` mengembalikan `nip` sebagai field tersendiri (selain `pegawai_id`).
+- Kepastian hanya dari melihat isi `@sesi` / response login.
+
+**Perilaku `detail_pegawai`:**
+- Tanpa cookie session valid → `{"status":200,"data":null}` (teruji).
+- Struktur `data` (dengan session): `nama_pegawai`, `nip`, `foto`, `url_foto`, `lokasi_id`, `lokasi_name`, `is_blokabsen`, `is_close`, `is_updatepass` (`decompiled.js:248715-248766`).
+- Jika dikirim `pegawai_id` yang salah (mis. NIP padahal server mengharap ID internal), kemungkinan juga mengembalikan `null` meski session valid.
+
+**Catatan keamanan:** cookie `simpegTVr126` = kredensial sesi. Siapa pun yang memilikinya bisa bertindak sebagai user sampai kadaluarsa (~2 jam) — perlakukan seperti password, jangan dibagikan.
+
+---
+
 ## 4. PRESENSI — Tahap Persiapan (sebelum ambil foto)
 
 ### 4.1 Cek status WFO/WFH ✅
