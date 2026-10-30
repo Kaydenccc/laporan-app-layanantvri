@@ -122,15 +122,16 @@ POST front_end/Login/auth_pegawai_app   → 500 Error
 - Response login `data` disimpan app ke AsyncStorage **`@sesi`** (`decompiled.js:231658`).
 - Semua endpoint mengambil `pegawai_id` dari `@sesi` via `getData()` (`decompiled.js:231402, 231435`) — jadi nilainya = `response.data.pegawai_id` dari login.
 
-**`pegawai_id` = NIP atau ID internal? — ⚠️ BELUM PASTI**
-- Nilai `pegawai_id` berasal dari response login, **bukan** diketik user.
-- Indikasi (bukan bukti) bahwa ini mungkin ID internal, bukan NIP: sistem memakai field `username`/`nip` DAN `pegawai_id` secara terpisah; response `detail_pegawai` mengembalikan `nip` sebagai field tersendiri (selain `pegawai_id`).
-- Kepastian hanya dari melihat isi `@sesi` / response login.
+**`pegawai_id` = ID internal, BUKAN NIP — ✅ TERKONFIRMASI**
+- Nilai `pegawai_id` berasal dari response login (`@sesi`), bukan diketik user.
+- Dari response `shift` asli: `pegawai_id` berupa **ID internal numerik** (mis. `10793`) — berbeda dari NIP (`username`). Jadi `pegawai_id` ≠ NIP.
+- Field `no` dan `user_id` di endpoint presensi juga = `pegawai_id` internal ini, **bukan NIP**.
+- Catatan menarik: ID internal ini sama dengan "kode" yang muncul di pesan device-binding (kode untuk diberikan ke Admin SIMPEG = `pegawai_id`).
 
 **Perilaku `detail_pegawai`:**
 - Tanpa cookie session valid → `{"status":200,"data":null}` (teruji).
-- Struktur `data` (dengan session): `nama_pegawai`, `nip`, `foto`, `url_foto`, `lokasi_id`, `lokasi_name`, `is_blokabsen`, `is_close`, `is_updatepass` (`decompiled.js:248715-248766`).
-- Jika dikirim `pegawai_id` yang salah (mis. NIP padahal server mengharap ID internal), kemungkinan juga mengembalikan `null` meski session valid.
+- Struktur `data`: `nama_pegawai`, `nip`, `foto`, `url_foto`, `lokasi_id`, `lokasi_name`, `is_blokabsen`, `is_close`, `is_updatepass` (`decompiled.js:248715-248766`).
+- Mengirim `pegawai_id` yang salah (mis. NIP padahal server mengharap ID internal) → `null`.
 
 **Catatan keamanan:** cookie `simpegTVr126` = kredensial sesi. Siapa pun yang memilikinya bisa bertindak sebagai user sampai kadaluarsa (~2 jam) — perlakukan seperti password, jangan dibagikan.
 
@@ -156,17 +157,45 @@ POST user/Presensi/get_time
 ```
 | Field | Isi |
 |---|---|
-| `lat` | latitude |
-| `long` | longitude |
-| `status_wf` | status kerja terpilih |
-| `pegawai_id` | NIP |
-| `lokasi_id` | ID lokasi |
+| `lat` | latitude GPS user |
+| `long` | longitude GPS user |
+| `status_wf` | status kerja terpilih (`WFO`/`WFH`) |
+| `pegawai_id` | ID internal pegawai (BUKAN NIP), mis. `10793` |
+| `lokasi_id` | ID lokasi (integer kecil, mis. `7`) |
+
+Response mengembalikan `jam` (waktu server) + `jarak` (jarak user↔kantor, dihitung server untuk geofencing). Koordinat kantor **tidak** dikirim ke klien.
 
 ### 4.4 Cek eligibility masuk ✅
 ```
 POST user/Presensi/cek_masuk
 ```
-Field: `pegawai_id`, `lokasi_id`. (Hanya cek — **tidak** mengirim foto.)
+**Field:** `pegawai_id`, `lokasi_id`. (Hanya cek status — **tidak** mengirim foto.)
+
+Ini **pengecekan status**, bukan submit. Server menentukan navigasi app:
+
+| `status` | Arti | Navigasi |
+|---|---|---|
+| 200 | ada record absen (sudah lengkap) | `MasukDetail` |
+| 201 | ada record absen, **belum pulang** (`finish:null`) | `MasukDetail` |
+| 202 | belum ada record hari ini | `Presensi` (form absen) |
+
+**Format response saat ada record** (nilai di bawah **placeholder**, bukan data asli):
+```jsonc
+{
+  "status": 201,
+  "data": {
+    "id":        "xxxxxxxx-xxxx-xxxx-xxxx-xxxxxxxxxxxx",  // UUID record absen (idAbsen)
+    "shift_id":  "<hash32>SHIF<n>",                        // id shift (hash + kode)
+    "no":        "<pegawai_id>",                           // ID internal pegawai (BUKAN NIP)
+    "present":   "2026-10-30",                             // tanggal (YYYY-MM-DD, tanpa spasi)
+    "shift_code":"0",
+    "status":    "WFO",                                    // status kerja (WFO/WFH)
+    "starting":  "2026-10-30 08:00:00",                    // jam masuk (YYYY-MM-DD HH:MM:SS, waktu server)
+    "finish":    null                                       // jam pulang (null = belum pulang)
+  }
+}
+```
+Tanggal (`present`) ditentukan **server** (hari ini) — tidak ada parameter tanggal yang dikirim.
 
 ---
 
@@ -176,31 +205,31 @@ Field: `pegawai_id`, `lokasi_id`. (Hanya cek — **tidak** mengirim foto.)
 ```
 POST user/Presensi/saveData          (multipart/form-data)
 ```
-| Field | Isi |
-|---|---|
-| `starting` | jam masuk lengkap (`set_jam`) |
-| `present` | tanggal (`set_jam` 11 char pertama) |
-| `starting_lat` | latitude |
-| `starting_lng` | longitude |
-| `status_wf` | status kerja |
-| `no` | NIP (`pegawai_id`) |
-| `user_id` | NIP (`pegawai_id`) |
-| `shift_id` | jam kerja (`set_jam_kerja`) |
-| `starting_photo` | **file foto** `{name, type, uri}` (bukan base64) |
+| Field | Isi | Format |
+|---|---|---|
+| `starting` | jam masuk (`set_jam`, waktu server) | `YYYY-MM-DD HH:MM:SS` |
+| `present` | tanggal (`set_jam`[0:11]) | `YYYY-MM-DD ` |
+| `starting_lat` | latitude GPS user | desimal |
+| `starting_lng` | longitude GPS user | desimal |
+| `status_wf` | status kerja | `WFO` / `WFH` |
+| `no` | **ID internal pegawai** (`pegawai_id`, BUKAN NIP) | numerik, mis. `10793` |
+| `user_id` | sama dengan `no` (`pegawai_id`) | numerik |
+| `shift_id` | id shift (`set_jam_kerja`) | `<hash32>SHIF<n>` |
+| `starting_photo` | **file foto** `{name, type, uri}` (bukan base64) | file jpeg |
 
 ### 5.2 Absen PULANG ✅
 ```
 POST user/Presensi/saveDataPulang    (multipart/form-data)
 ```
-| Field | Isi |
-|---|---|
-| `finish` | jam pulang (`set_jam`) |
-| `id` | ID presensi (`id_p`) |
-| `finish_lat` | latitude |
-| `finish_lng` | longitude |
-| `no` | NIP |
-| `user_id` | NIP |
-| `finish_photo` | **file foto** `{name, type, uri}` |
+| Field | Isi | Format |
+|---|---|---|
+| `finish` | jam pulang (`set_jam`, waktu server) | `YYYY-MM-DD HH:MM:SS` |
+| `id` | ID record presensi (`id_p`) | UUID |
+| `finish_lat` | latitude GPS user | desimal |
+| `finish_lng` | longitude GPS user | desimal |
+| `no` | **ID internal pegawai** (BUKAN NIP) | numerik, mis. `10793` |
+| `user_id` | sama dengan `no` | numerik |
+| `finish_photo` | **file foto** `{name, type, uri}` | file jpeg |
 
 > Foto dikirim sebagai **file multipart** (objek `{name, type, uri}`), bukan string base64.
 
